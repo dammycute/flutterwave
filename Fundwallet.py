@@ -1,34 +1,30 @@
-from django.conf import settings
-from django.shortcuts import get_object_or_404
-from rest_framework import status
-from rest_framework.views import APIView
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.views.generic.edit import CreateAPIView
+from rest_framework import permissions
+from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
 from .models import Transaction, Wallet
-import requests
-import uuid
+from .serializers import TransactionSerializer
 
 
-class FundWalletAPIView(APIView):
-    def post(self, request, *args, **kwargs):
-        # get the amount from the request data
-        amount = request.data.get('amount')
-        if not amount:
-            return Response({'error': 'Please provide an amount to fund the wallet'}, status=status.HTTP_400_BAD_REQUEST)
+class FundWalletView(LoginRequiredMixin, CreateAPIView):
+    serializer_class = TransactionSerializer
+    permission_classes = [permissions.IsAuthenticated]
 
-        # generate a transaction reference using uuid
-        transaction_ref = str(uuid.uuid4())
-
+    def create(self, request, *args, **kwargs):
+        wallet = get_object_or_404(Wallet, user=request.user)
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        amount = serializer.validated_data['amount']
+        transaction_ref = f'{request.user.username}_{uuid.uuid4()}'
         # create a new transaction record in the database
         transaction = Transaction.objects.create(
             user=request.user,
+            wallet=wallet,
             transaction_ref=transaction_ref,
             amount=amount
         )
-
-        # get or create the user's wallet
-        wallet, created = Wallet.objects.get_or_create(user=request.user)
-
-        # construct the URL for the Flutterwave payment page
+        # construct the payload for the Flutterwave payment page
         payload = {
             'tx_ref': transaction_ref,
             'amount': amount,
@@ -50,6 +46,5 @@ class FundWalletAPIView(APIView):
             'Authorization': f'Bearer {settings.FLUTTERWAVE_SECRET_KEY}',
             'Content-Type': 'application/json'
         }, json=payload)
-
-        # redirect the user to the Flutterwave payment page
-        return Response({'payment_url': response.json()['data']['link']})
+        # return the Flutterwave payment link to the client
+        return Response({'payment_link': response.json()['data']['link']})
